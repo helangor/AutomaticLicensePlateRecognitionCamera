@@ -7,15 +7,45 @@ import sys
 from PIL import Image, ImageDraw, ExifTags, ImageColor
 import boto3
 import io
-
 #import gphoto2 as gp
-
 
 def has_numbers(inputString):
      return any(char.isdigit() for char in inputString)
 
 def has_letters(inputString):
      return any(char.isalpha() for char in inputString)
+
+def convert(list):  
+    res = "".join(map(str, list))
+    return res 
+
+#Muokkaa kilven kirjoitusasun oikeaksi.
+def license_plate_text_parsing (license_plate):
+    if (len(license_plate) >= 7) and ("-" in license_plate):
+        final_license_plate = (license_plate[:3] + "-" + license_plate[-3:])
+        print(final_license_plate)
+    else:
+        i = 0
+        y = 0
+        letters = []
+        numbers = []
+        #Tämä ottaa kirjaimet
+        for character in license_plate:
+            if (character.isalpha() == False) or (i>2) or (character == "-"):
+                break
+            letters.append(character)
+            i+=1
+        #Tämä ottaa numerot
+        for number in reversed(license_plate):
+            if (number.isdigit() == False) or (y>2) or (number == "-"):
+                break
+            numbers.append(number)
+            i+=1
+        numbers = numbers[::-1]
+        #Adds letters and numbers together and combines final license plate
+        final_license_plate = (convert(letters)+"-"+convert(numbers))
+        print(final_license_plate)
+    return final_license_plate
 
 def take_photo():
     #Määrittää kameran
@@ -54,20 +84,25 @@ def get_car_location(file, bucket):
     print("Tunnistaa autoa")
     response = client.detect_labels(Image={'S3Object':{'Bucket':bucket,'Name':thumbnailphoto}},
         MaxLabels=5)
+    #found_car = False
+    biggest_car_box = 0
 
     for label in response['Labels']:
-        if ((label['Name'] == "Car") or (label['Name'] == "Vehicle")):
-            biggest_car_box = 0
+        print("label: ", label)
+        #biggest_car_box = 0
+        if ((label['Name'] == "Car") or (label['Name'] == "Vehicle") or (label['Name'] == "Automobile")):
             for instance in label['Instances']:
                 confidence = float(instance['Confidence'])
                 print("Auton tunnistus tarkkuus: ", confidence)
                 if float(instance['BoundingBox']['Width']) > biggest_car_box and confidence > 83:
                     biggest_car_box = float(instance['BoundingBox']['Width'])
+                    #found_car = True
                     print("Biggest car box: ", biggest_car_box)
                     height = float(instance['BoundingBox']['Height'])
                     left = float(instance['BoundingBox']['Left'])
                     top = float(instance['BoundingBox']['Top'])
                     width = float(instance['BoundingBox']['Width'])
+        #if found_car == False:
     if biggest_car_box == 0:
         print("Autoja ei löydetty kuvasta")
         quit()
@@ -78,11 +113,12 @@ def get_car_location(file, bucket):
 
 #Ottaa arvona kuvan auton paikan
 def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence):
+    
     height = imgHeight * car_location[0]
     left = imgWidth * car_location[1]
     top = imgHeight * car_location[2]
     width = imgWidth * car_location[3]
-
+    
     #Croppaa auton kuvasta parametrien avulla ja lähettää Amazoniin   
     infile = photo + ".JPG"
     im = Image.open(infile)
@@ -91,7 +127,7 @@ def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, 
     #Provide the target width and height of the image
     cropped = im.crop( ( left, top, left + width, top + height ) ) 
     cropped.save(cropped_photo, "JPEG")
-
+    
     #Uppaa kuvan amazonin buckettiin 
     s3 = boto3.client('s3')
     s3.upload_file(cropped_photo, bucket, cropped_photo)
@@ -99,7 +135,6 @@ def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, 
     client=boto3.client('rekognition')
 
     saved_texts = []
-
     response=client.detect_text(Image={'S3Object':{'Bucket':bucket,'Name':cropped_photo}})
     textDetections=response['TextDetections']
     print("Tunnistaa kilpeä")
@@ -109,26 +144,35 @@ def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, 
         if (float(text['Confidence']) > license_plate_confidence and len(found_text) >= 2 and (has_numbers(found_text) == True) and (has_letters(found_text) == True)):
             saved_texts.append(found_text)
     if len(saved_texts) > 0:
-        license_plate_text = saved_texts[0]
-        print(license_plate_text)
+        license_plate = saved_texts[0]
+        final_license_plate = license_plate_text_parsing(license_plate)
+        return final_license_plate
     else:
         print("Kilpiä ei tunnistettu kuvasta")
-    #Tähän vielä sellanne, että lähtee oikealta liikkeelle ja kun törmää ekaan kirjaimeen niin laittaa väliviivan ennen sitä, jollei jo ole sanassa. Myös sen jälkeen muuttaa numeropuolen ykköset kirjaimiksi etc.
-    #Lähtee vasemmalta ja ottaa kolme ensimmäistä kirjainta
-    #Seuraavaksi tähän operaatio, joka poistaa kuvat bucketista.
-    #Sellanen vielä, että osaa ottaa molemmat autot. Ei vaikka pelkästään yhtä, jos tarkkuus tietenkin riittävä. 
+
+#Gets the data of car by its license plate
+def get_car_data(license_plate):
+    print("Get data of: ", license_plate)
+
 
 def main():
     #muuta bucket ja thumbnailphoto tänne muuttujiksi. Tai bucket ylös vakioksi. 
-    photo = "c:\\Users\\Henrikki\\Downloads\\Licenseplaterecog\\Rekisterikilvet\\DSC_0050"
+    photo = "c:\\Users\\Henrikki\\Downloads\\Licenseplaterecog\\Rekisterikilvet\\DSC_0047"
     imgHeight = 4000
     imgWidth = 6000
     bucket = 'helanderinkanakori'
     license_plate_confidence = 80 #Kuinka monta prosenttia suurempi varmuuden pitää olla, että kilpi hyväksytään. Eli nyt tunnistetaan teksti > 80% varmuudella. 
     car_location = []
+
     crop_and_upload_photo(photo, bucket, imgHeight, imgWidth)
     car_location = get_car_location(photo, bucket)
-    license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence)
+    final_plate = license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence)
+    get_car_data(final_plate)
+
+
+    #Seuraavaksi tähän operaatio, joka poistaa kuvat bucketista.
+    #Sellanen vielä, että osaa ottaa molemmat autot. Ei vaikka pelkästään yhtä, jos tarkkuus tietenkin riittävä. 
+
 
 if __name__ == "__main__":
     sys.exit(main())
