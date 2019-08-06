@@ -7,6 +7,8 @@ import sys
 from PIL import Image, ImageDraw, ExifTags, ImageColor
 import boto3
 import io
+from get_license_plate_data import get_data
+
 #import gphoto2 as gp
 
 def has_numbers(inputString):
@@ -150,11 +152,6 @@ def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, 
     else:
         print("Kilpiä ei tunnistettu kuvasta")
 
-#Gets the data of car by its license plate
-def get_car_data(license_plate):
-    print("Get data of: ", license_plate)
-
-
 def main():
     #muuta bucket ja thumbnailphoto tänne muuttujiksi. Tai bucket ylös vakioksi. 
     photo = "c:\\Users\\Henrikki\\Downloads\\Licenseplaterecog\\Rekisterikilvet\\DSC_0047"
@@ -164,10 +161,12 @@ def main():
     license_plate_confidence = 80 #Kuinka monta prosenttia suurempi varmuuden pitää olla, että kilpi hyväksytään. Eli nyt tunnistetaan teksti > 80% varmuudella. 
     car_location = []
 
-    crop_and_upload_photo(photo, bucket, imgHeight, imgWidth)
-    car_location = get_car_location(photo, bucket)
-    final_plate = license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence)
-    get_car_data(final_plate)
+    #crop_and_upload_photo(photo, bucket, imgHeight, imgWidth)
+    #car_location = get_car_location(photo, bucket)
+    #final_plate = license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence)
+    final_plate = "RLY-921"
+    get_data(final_plate)
+    #get_car_data(final_plate)
 
 
     #Seuraavaksi tähän operaatio, joka poistaa kuvat bucketista.
