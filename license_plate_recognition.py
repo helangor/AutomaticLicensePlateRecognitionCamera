@@ -1,11 +1,8 @@
-from __future__ import print_function
 import os
 import subprocess
-import sys
 from PIL import Image, ImageDraw, ExifTags, ImageColor
 import boto3
 import io
-from price_predictor import get_car_data
 #import gphoto2 as gp
 
 def has_numbers(inputString):
@@ -18,19 +15,22 @@ def convert(list):
     res = "".join(map(str, list))
     return res 
 
-#Muokkaa kilven kirjoitusasun oikeaksi.
-
-#YGE-9441
-#Tämä kilpi oikeaksi. 
 def license_plate_text_parsing (license_plate):
-    if (len(license_plate) >= 7) and ("-" in license_plate):
+    if ((len(license_plate) == 6) or (len(license_plate) == 7)) and ("-" in license_plate):
         final_license_plate = (license_plate[:3] + "-" + license_plate[-3:])
-        print(final_license_plate)
+    elif (len(license_plate) == 8) and ("-" in license_plate) and (license_plate[-1:] == "1"):
+        final_license_plate = (license_plate[:3] + "-" + license_plate[-4:-1])
     else:
         i = 0
         y = 0
         letters = []
         numbers = []
+        #Tämä muuttaa mahdolliset 1 ja 0 kirjaimissa I ja O-kirjaimiksi 
+        if ((len(license_plate) == 6) or (len(license_plate) == 7)):
+            license_plate_letters = license_plate[:3]
+            license_plate_letters = license_plate[:3].replace("0","O")
+            license_plate_letters = license_plate_letters.replace("1","I")
+            license_plate = (license_plate_letters + "-" + license_plate[-3:])
         #Tämä ottaa kirjaimet
         for character in license_plate:
             if (character.isalpha() == False) or (i>2) or (character == "-"):
@@ -42,11 +42,10 @@ def license_plate_text_parsing (license_plate):
             if (number.isdigit() == False) or (y>2) or (number == "-"):
                 break
             numbers.append(number)
-            i+=1
+            y+=1
         numbers = numbers[::-1]
         #Adds letters and numbers together and combines final license plate
         final_license_plate = (convert(letters)+"-"+convert(numbers))
-        print(final_license_plate)
     return final_license_plate
 
 def take_photo():
@@ -60,40 +59,40 @@ def take_photo():
             camera, file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL))
     gp.check_result(gp.gp_file_save(camera_file, target))
 
-def crop_and_upload_photo(photo, bucket, imgHeight, imgWidth, thumbnailphoto):
-    size = imgHeight*0.2, imgWidth*0.2
+def crop_and_upload_photo(photo, bucket, imgHeight, imgWidth):
+    ratio = 1600/imgWidth
+    print("Ratio:", ratio)
+    size = imgHeight*ratio, imgWidth*ratio
     infile = (photo + ".JPG")
+    thumbnailphoto = photo + "thumbnail.JPG"
     print("tekee thumbnailin")
-    im = Image.open(infile)
-    im.thumbnail(size, Image.ANTIALIAS)
-    im.save(thumbnailphoto, "JPEG")
-            
-    #Lähettää tämän Amazoniin
-    print("lähettää Amazoniin")
-    s3 = boto3.client('s3')
-    s3.upload_file(thumbnailphoto, bucket, thumbnailphoto)
-
+    try:
+        im = Image.open(infile)
+        im.thumbnail(size, Image.ANTIALIAS)
+        im.save(thumbnailphoto, "JPEG")
+                
+        #Lähettää tämän Amazoniin
+        print("lähettää Amazoniin")
+        s3 = boto3.client('s3')
+        s3.upload_file(thumbnailphoto, bucket, thumbnailphoto)
+    except:
+        print("Can't crop photo")
     #pip install awscli
     #https://qiita.com/hengsokvisal/items/329924dd9e3f65dd48e7
 
-#ottaa 
-def get_car_location(file, bucket, thumbnailphoto):
-    #Antaa paluuarvona auton lokaation kuvassa
+def get_car_location(photo, bucket, car_detection_confidence, car_detection_place):
+    thumbnailphoto = photo + "thumbnail.JPG"
     client=boto3.client('rekognition')
     print("Tunnistaa autoa")
-
     response = client.detect_labels(Image={'S3Object':{'Bucket':bucket,'Name':thumbnailphoto}},MaxLabels=5)
     biggest_car_box = 0
 
     for label in response['Labels']:
-        #print("label: ", label)
         if ((label['Name'] == "Car") or (label['Name'] == "Vehicle") or (label['Name'] == "Automobile")):
             for instance in label['Instances']:
                 confidence = float(instance['Confidence'])
-                #print("Auton tunnistus tarkkuus: ", confidence)
-                if float(instance['BoundingBox']['Width']) > biggest_car_box and confidence > 83:
+                if float(instance['BoundingBox']['Width']) > biggest_car_box and confidence > car_detection_confidence and float(instance['BoundingBox']['Left']) >= car_detection_place:
                     biggest_car_box = float(instance['BoundingBox']['Width'])
-                    #print("Biggest car box: ", biggest_car_box)
                     height = float(instance['BoundingBox']['Height'])
                     left = float(instance['BoundingBox']['Left'])
                     top = float(instance['BoundingBox']['Top'])
@@ -107,7 +106,7 @@ def get_car_location(file, bucket, thumbnailphoto):
         return car_location
 
 #Ottaa arvona kuvan auton paikan
-def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence):
+def get_license_plate(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence):
     
     height = imgHeight * car_location[0]
     left = imgWidth * car_location[1]
@@ -129,42 +128,32 @@ def license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, 
     #Lähettää kuvan tekstintunnistukseen ja saa paluuviestinä rekisterinumeron
     client=boto3.client('rekognition')
 
-    saved_texts = []
+    saved_plate = ""
+    earlier_confidence = 0
+
     response=client.detect_text(Image={'S3Object':{'Bucket':bucket,'Name':cropped_photo}})
     textDetections=response['TextDetections']
     print("Tunnistaa kilpeä")
     for text in textDetections:
         found_text = (text['DetectedText'])
-        print(found_text, " Confidence: ", float(text['Confidence']))
-        if (float(text['Confidence']) > license_plate_confidence and len(found_text) >= 2 and (has_numbers(found_text) == True) and (has_letters(found_text) == True)):
-            saved_texts.append(found_text)
-    if len(saved_texts) > 0:
-        license_plate = saved_texts[0]
-        final_license_plate = license_plate_text_parsing(license_plate)
+        if (float(text['Confidence']) > license_plate_confidence and float(text['Confidence']) > earlier_confidence and len(found_text) >= 2 and (has_numbers(found_text) == True) and (has_letters(found_text) == True)):
+            saved_plate = found_text
+            earlier_confidence = float(text['Confidence'])
+    if saved_plate != "":
+        final_license_plate = license_plate_text_parsing(saved_plate)
+        print("License plate: ", final_license_plate)
         return final_license_plate
     else:
         print("Kilpiä ei tunnistettu kuvasta")
+        return saved_plate
 
-def main():
-    #muuta bucket ja thumbnailphoto tänne muuttujiksi. Tai bucket ylös vakioksi. 
-    photo = "C:\\Users\\Henrikki\\Desktop\\alpr\\Rekisterikilvet\\DSC_0043"
+def delete_photos(photo, bucket):
+    cropped_photo = photo + "cropped.JPG"
     thumbnailphoto = photo + "thumbnail.JPG"
-    imgHeight = 4000
-    imgWidth = 6000
-    bucket = 'helanderinkanakori'
-    license_plate_confidence = 80 #Kuinka monta prosenttia suurempi varmuuden pitää olla, että kilpi hyväksytään. Eli nyt tunnistetaan teksti > 80% varmuudella. 
-    car_location = []
+    s3 = boto3.client('s3')
+    s3.delete_object(Bucket=bucket, Key=thumbnailphoto)
+    s3.delete_object(Bucket=bucket, Key=cropped_photo)
+    print("Kuvat poistettu pilvestä")
 
-    crop_and_upload_photo(photo, bucket, imgHeight, imgWidth, thumbnailphoto)
-    car_location = get_car_location(photo, bucket, thumbnailphoto)
-    final_plate = license_plate_recognition(photo, bucket, car_location, imgHeight, imgWidth, license_plate_confidence)
-    get_car_data(final_plate)
 
-    #Seuraavaksi tähän operaatio, joka poistaa kuvat bucketista.
-    #YGE-9441
-    #Tämä kilpi oikeaksi. 
-
-    #Sellanen vielä, että osaa ottaa molemmat autot. Ei vaikka pelkästään yhtä, jos tarkkuus tietenkin riittävä. 
-
-if __name__ == "__main__":
-    sys.exit(main())
+license_plate_text_parsing("L0E:236")
