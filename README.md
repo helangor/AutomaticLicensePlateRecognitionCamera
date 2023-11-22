@@ -13,9 +13,6 @@ I wanted to try if it would be possible to automate my car data system completel
 I learned to use AWS cloud capabilities like Rekognition and S3
 How to use Raspberry to control DSLR camera. 
 
-### Video about the project
-Check the video from [youtube](https://youtu.be/uK3eVwtiEgY) 
-
 ## Contributing
 Pull requests are welcome.
 
